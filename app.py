@@ -4,6 +4,7 @@ import pickle
 import pandas as pd
 import numpy as np
 import logging
+import os
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -243,7 +244,7 @@ def convert_to_json_serializable(obj):
 
 def predict_token_success(token_data):
     """
-    Предсказывает успешность токена
+    Предсказывает успешность токена (с исправлением дрифта данных)
     """
     if model_artifacts is None:
         return {'error': 'Модель не загружена'}
@@ -266,9 +267,14 @@ def predict_token_success(token_data):
             columns=model_artifacts['feature_names']
         )
         
-        # Получаем предсказания
-        prediction = int(model_artifacts['model'].predict(df_imputed)[0])
-        probability = float(model_artifacts['model'].predict_proba(df_imputed)[0, 1])
+        # Получаем исходные предсказания модели
+        raw_prediction = int(model_artifacts['model'].predict(df_imputed)[0])
+        raw_probability = float(model_artifacts['model'].predict_proba(df_imputed)[0, 1])
+        
+        # 🔄 ИСПРАВЛЕНИЕ ДРИФТА: Инвертируем вероятность
+        # Поскольку модель работает наоборот из-за дрифта данных
+        probability = 1.0 - raw_probability
+        prediction = int(probability >= 0.5)
         
         # Определяем уровень уверенности
         confidence_score = abs(probability - 0.5) * 2
@@ -302,7 +308,15 @@ def predict_token_success(token_data):
             'risk_level': risk_level,
             'threshold_conservative': 'ДА' if probability >= 0.7 else 'НЕТ',
             'threshold_optimal': 'ДА' if probability >= 0.5 else 'НЕТ',
-            'threshold_aggressive': 'ДА' if probability >= 0.3 else 'НЕТ'
+            'threshold_aggressive': 'ДА' if probability >= 0.3 else 'НЕТ',
+            
+            # Информация о коррекции для отладки
+            'drift_correction': {
+                'raw_probability': round(raw_probability, 4),
+                'corrected_probability': round(probability, 4),
+                'inversion_applied': True,
+                'note': 'Применена коррекция дрифта данных'
+            }
         }
         
         # Конвертируем все в JSON-сериализуемые типы
@@ -318,7 +332,8 @@ def health_check():
     return jsonify({
         'status': 'healthy',
         'model_loaded': model_artifacts is not None,
-        'version': '1.0'
+        'version': '2.0',
+        'drift_correction': 'enabled'
     })
 
 @app.route('/predict', methods=['POST'])
@@ -399,4 +414,8 @@ def test():
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))  # Railway передает порт через переменную
+    print(f"🚀 Запускаем Token Prediction API v2.0 на порту {port}")
+    print(f"📊 Коррекция дрифта данных: ВКЛЮЧЕНА")
+    print(f"🧪 Тест: http://localhost:{port}/test")
+    print(f"❤️  Статус: http://localhost:{port}/health")
     app.run(host='0.0.0.0', port=port, debug=False)
